@@ -15,9 +15,7 @@ async function fetchCredentials() {
         mode: "cors"
     })
         .then(res => res.json())
-        .catch(err => {
-            console.error(err);
-        });
+        .catch(console.error);
 
     return {
         clubNo,
@@ -40,13 +38,11 @@ async function fetchClasses(token, clubNo, contractPersonId) {
         mode: "cors"
     })
         .then(res => res.json())
-        .catch(err => {
-            console.error(err);
-        });
+        .catch(console.error);
 }
 
 async function addBooking(token, clubClassId, contractPersonId) {
-    const { result } = await fetch("https://api.vivagym.net:44301//Class/AddBooking", {
+    const { result, error } = await fetch("https://api.vivagym.net:44301//Class/AddBooking", {
         credentials: "include",
         headers: {
             accept: "application/json",
@@ -59,60 +55,80 @@ async function addBooking(token, clubClassId, contractPersonId) {
         mode: "cors"
     })
         .then(res => res.json())
-        .catch(err => {
-            console.error(err);
-        });
-    return result;
+        .catch(console.error);
+
+    return result || error;
 }
 
-async function getDayOfWeek(classesDates) {
-    const { dayOfweek } = await inquirer.prompt([
+async function cancelBooking(token, clubClassId, contractPersonId) {
+    const { result, error } = await fetch("https://api.vivagym.net:44301//Class/CancelBooking", {
+        credentials: "include",
+        headers: {
+            accept: "application/json",
+            authorization: `Basic ${token}`,
+            "content-type": "application/json",
+            "sec-fetch-mode": "cors"
+        },
+        body: JSON.stringify({ contractPersonId, clubClassId }),
+        method: "POST",
+        mode: "cors"
+    })
+        .then(res => res.json())
+        .catch(console.error);
+
+    return result || error;
+}
+
+async function prompt(allClasses) {
+    const { clubClass } = await inquirer.prompt([
         {
             type: "list",
             message: "Select a date",
             name: "dayOfweek",
-            choices: classesDates
-        }
-    ]);
-    return { dayOfweek };
-}
-
-async function getClass(classes) {
-    const { clubClassId } = await inquirer.prompt([
+            choices: () => {
+                return allClasses.map(c => {
+                    return {
+                        name: new Date(c.date).toDateString(),
+                        value: c.day
+                    };
+                });
+            }
+        },
         {
             type: "list",
             message: "Select a class",
-            name: "clubClassId",
-            choices: classes
+            name: "clubClass",
+            choices: answers => {
+                return allClasses
+                    .find(c => c.day === answers.dayOfweek)
+                    .clubClasses.map(c => {
+                        const name = `${c.name} ${c.startTime} (${c.spacesAvailable})`;
+                        return {
+                            name: c.isBooked ? `>> ${name} <<` : name,
+                            value: { clubClassId: c.id, isBooked: c.isBooked }
+                        };
+                    });
+            }
         }
     ]);
-    return { clubClassId };
+
+    return { ...clubClass };
 }
 
 async function main() {
     const { clubNo, contractPersonId, token } = await fetchCredentials();
 
     const allClasses = await fetchClasses(token, clubNo, contractPersonId);
-    const classesDates = allClasses.map(c => {
-        return {
-            name: new Date(c.date).toDateString(),
-            value: c.day
-        };
-    });
+    const { clubClassId, isBooked } = await prompt(allClasses);
 
-    const { dayOfweek } = await getDayOfWeek(classesDates);
-    const dateObj = allClasses.find(c => c.day === dayOfweek);
+    let response;
+    if (isBooked) {
+        response = await cancelBooking(token, clubClassId, contractPersonId);
+    } else {
+        response = await addBooking(token, clubClassId, contractPersonId);
+    }
 
-    const classNamesHour = dateObj.clubClasses.map(c => {
-        return {
-            name: `${c.name} ${c.startTime} (${c.spacesAvailable})`,
-            value: c.id
-        };
-    });
-    const { clubClassId } = await getClass(classNamesHour);
-
-    const response = await addBooking(token, clubClassId, contractPersonId);
-    console.log("response: ", response);
+    console.log(response);
 }
 
 main();
