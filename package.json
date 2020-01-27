@@ -11,5 +11,8 @@
   "dependencies": {
     "inquirer": "^7.0.0",
     "node-fetch": "^2.6.0"
+  },
+  "devDependencies": {
+    "prettier": "^1.19.1"
   }
 }
