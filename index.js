@@ -1,80 +1,51 @@
 // Usage node index.js <email> <password>
 
-const fetch = require("node-fetch");
-const inquirer = require("inquirer");
+const fetch = require('node-fetch');
+const inquirer = require('inquirer');
 
-const EMAIL = process.argv[2];
-const PWD = process.argv[3];
+const googleCalendarApi = require('./google_calendar_api');
+const vivagymApi = require('./vivigym_api');
 
-async function fetchCredentials() {
-    const { clubNo, contractPersonId, token } = await fetch("https://api.vivagym.net:44301//User/Login", {
-        credentials: "omit",
-        headers: { accept: "application/json", "content-type": "application/json", "sec-fetch-mode": "cors" },
-        body: JSON.stringify({ Username: EMAIL, Password: PWD }),
-        method: "POST",
-        mode: "cors"
-    })
-        .then(res => res.json())
-        .catch(console.error);
+const [EMAIL, PASSWORD] = process.argv.slice(2);
+const CALENDAR_ID = '';
+const ACCESS_TOKEN_ENDPOINT = '';
 
-    return {
-        clubNo,
-        contractPersonId,
-        token
-    };
-}
+async function addBooking(token, clubClassId, contractPersonId, { name, classDate, startTime, endTime }) {
+    const { result, error } = await vivagymApi.addBooking(token, clubClassId, contractPersonId);
 
-async function fetchClasses(token, clubNo, contractPersonId) {
-    const currentDate = encodeURI(new Date().toISOString());
-    return await fetch(`https://api.vivagym.net:44301//Class/ListClubClassesForPerson?classDateFrom=${currentDate}&clubNo=${clubNo}&contractPersonId=${contractPersonId}&noOfDays=7&studioNo=0`, {
-        credentials: "include",
-        headers: {
-            accept: "application/json",
-            authorization: `Basic ${token}`,
-            "content-type": "application/json",
-            "sec-fetch-mode": "cors"
-        },
-        method: "GET",
-        mode: "cors"
-    })
-        .then(res => res.json())
-        .catch(console.error);
-}
+    if (CALENDAR_ID) {
+        const { accessToken } = await fetch(ACCESS_TOKEN_ENDPOINT).then(res => res.json());
 
-async function addBooking(token, clubClassId, contractPersonId) {
-    const { result, error } = await fetch("https://api.vivagym.net:44301//Class/AddBooking", {
-        credentials: "include",
-        headers: {
-            accept: "application/json",
-            authorization: `Basic ${token}`,
-            "content-type": "application/json",
-            "sec-fetch-mode": "cors"
-        },
-        body: JSON.stringify({ contractPersonId, clubClassId, equipmentNo: null, isInduction: false }),
-        method: "POST",
-        mode: "cors"
-    })
-        .then(res => res.json())
-        .catch(console.error);
+        const { items } = await googleCalendarApi.getEvents(accessToken, CALENDAR_ID, clubClassId);
 
-    return result || error;
-}
+        if (items.length === 0) {
+            const startDateTime = new Date(classDate);
+            const [startHour, startMinutes] = startTime.split(':').map(e => Number.parseInt(e));
+            startDateTime.setHours(startHour);
+            startDateTime.setMinutes(startMinutes);
 
-async function cancelBooking(token, clubClassId, contractPersonId) {
-    const { result, error } = await fetch("https://api.vivagym.net:44301//Class/CancelBooking", {
-        credentials: "include",
-        headers: {
-            accept: "application/json",
-            authorization: `Basic ${token}`,
-            "content-type": "application/json",
-            "sec-fetch-mode": "cors"
-        },
-        body: JSON.stringify({ contractPersonId, clubClassId }),
-        method: "POST",
-        mode: "cors"
-    })
-        .then(res => res.json())
-        .catch(console.error);
+            const endDateTime = new Date(classDate);
+            const [endHour, endMinutes] = endTime.split(':').map(e => Number.parseInt(e));
+            endDateTime.setHours(endHour);
+            endDateTime.setMinutes(endMinutes);
+
+            await googleCalendarApi.insertEvent(accessToken, CALENDAR_ID, {
+                description: clubClassId,
+                summary: name,
+                end: {
+                    dateTime: endDateTime.toISOString(),
+                    timeZone: 'Europe/Madrid'
+                },
+                start: {
+                    dateTime: startDateTime.toISOString(),
+                    timeZone: 'Europe/Madrid'
+                },
+                reminders: {
+                    useDefault: true
+                }
+            });
+        }
+    }
 
     return result || error;
 }
@@ -82,9 +53,9 @@ async function cancelBooking(token, clubClassId, contractPersonId) {
 async function prompt(allClasses) {
     const { clubClass } = await inquirer.prompt([
         {
-            type: "list",
-            message: "Select a date",
-            name: "dayOfweek",
+            type: 'list',
+            message: 'Select a date',
+            name: 'dayOfweek',
             choices: () => {
                 return allClasses.map(c => {
                     return {
@@ -95,9 +66,9 @@ async function prompt(allClasses) {
             }
         },
         {
-            type: "list",
-            message: "Select a class",
-            name: "clubClass",
+            type: 'list',
+            message: 'Select a class',
+            name: 'clubClass',
             choices: answers => {
                 return allClasses
                     .find(c => c.day === answers.dayOfweek)
@@ -105,7 +76,7 @@ async function prompt(allClasses) {
                         const name = `${c.name} ${c.startTime} (${c.spacesAvailable})`;
                         return {
                             name: c.isBooked ? `>> ${name} <<` : name,
-                            value: { clubClassId: c.id, isBooked: c.isBooked }
+                            value: { clubClassId: c.id, isBooked: c.isBooked, raw: c }
                         };
                     });
             }
@@ -116,16 +87,16 @@ async function prompt(allClasses) {
 }
 
 async function main() {
-    const { clubNo, contractPersonId, token } = await fetchCredentials();
+    const { clubNo, contractPersonId, token } = await vivagymApi.login(EMAIL, PASSWORD);
 
-    const allClasses = await fetchClasses(token, clubNo, contractPersonId);
-    const { clubClassId, isBooked } = await prompt(allClasses);
+    const allClasses = await vivagymApi.getClasses(token, clubNo, contractPersonId);
+    const { clubClassId, isBooked, raw } = await prompt(allClasses);
 
     let response;
     if (isBooked) {
-        response = await cancelBooking(token, clubClassId, contractPersonId);
+        response = await vivagymApi.cancelBooking(token, clubClassId, contractPersonId);
     } else {
-        response = await addBooking(token, clubClassId, contractPersonId);
+        response = await addBooking(token, clubClassId, contractPersonId, raw);
     }
 
     console.log(response);
